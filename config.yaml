@@ -1,0 +1,12 @@
+model: claude-sonnet-4-6
+corpus_dir: ./corpus
+custom_corpus_dir: ./corpus_custom
+prompts_dir: ./prompts
+max_tokens: 4096
+max_doc_chars: 15000          # Per-doc truncation limit (keeps corpus within context window)
+cache_corpus: true
+
+# Smart scope-to-preflight settings
+scope_dir: ./scope                    # Default directory for project scope files
+scope_model: claude-haiku-4-5-20251001  # Lighter model for Pass 1 (task generation)
+scope_max_tokens: 1024                # Max output tokens for Pass 1

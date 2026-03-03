@@ -1,0 +1,10 @@
+# Environment and secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Corpus cache files
+corpus/.corpus_cache
+corpus/.corpus_hash
