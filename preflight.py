@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 import yaml
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, APITimeoutError
 
 # Load .env file if present (for ANTHROPIC_API_KEY)
 try:
@@ -81,6 +81,36 @@ def truncate_content(content: str, max_chars: int) -> str:
         truncated = truncated[:last_break]
 
     return truncated + "\n\n[... truncated — see full doc for details]"
+
+
+RETRYABLE_STATUS_CODES = {429, 529}
+MAX_RETRIES = 3
+BASE_DELAY = 2  # seconds
+
+
+def api_call_with_retry(func, *args, **kwargs):
+    """Wrap an Anthropic API call with exponential backoff for transient errors."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return func(*args, **kwargs)
+        except APIStatusError as e:
+            if e.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
+                delay = BASE_DELAY * (2 ** attempt)
+                status = "overloaded" if e.status_code == 529 else "rate limited"
+                print(f"API {status} (HTTP {e.status_code}), retrying in {delay}s "
+                      f"(attempt {attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(delay)
+            else:
+                raise
+        except (APIConnectionError, APITimeoutError) as e:
+            if attempt < MAX_RETRIES:
+                delay = BASE_DELAY * (2 ** attempt)
+                err_type = "timeout" if isinstance(e, APITimeoutError) else "connection error"
+                print(f"API {err_type}, retrying in {delay}s "
+                      f"(attempt {attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(delay)
+            else:
+                raise
 
 
 def load_corpus(corpus_dir: str, custom_corpus_dir: str = None,
@@ -228,7 +258,8 @@ def run_preflight(task: str, env: str = None, concerns: str = None,
     user_msg = build_user_message(task, env, concerns)
 
     # Use structured system messages with prompt caching on the corpus
-    response = client.messages.create(
+    response = api_call_with_retry(
+        client.messages.create,
         model=config.get("model", "claude-sonnet-4-6"),
         max_tokens=config.get("max_tokens", 4096),
         system=[
@@ -372,7 +403,8 @@ def generate_task_from_scope(scope_content: str, config: dict) -> dict:
 
     scope_prompt = load_scope_prompt(config.get("prompts_dir", "./prompts"))
 
-    response = client.messages.create(
+    response = api_call_with_retry(
+        client.messages.create,
         model=config.get("scope_model", "claude-haiku-4-5-20251001"),
         max_tokens=config.get("scope_max_tokens", 1024),
         system=scope_prompt,
