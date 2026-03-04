@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(pip install requests pyyaml pyperclip anthropic)",
+      "Bash(pip3 install requests pyyaml pyperclip anthropic)",
+      "Bash(python3 scrape_docs.py)",
+      "Bash(ls corpus/*.md)",
+      "Bash(wc -c corpus/*.md)",
+      "Read(//Users/patrick/Documents/claude-code-preflight-project-plan/{printf \"\"%6.1f KB  %s\\\\n\"\", $5/**)",
+      "Bash(python3 -c \":*)",
+      "Bash(python3 -c \"import preflight; print\\(''Module loads OK''\\)\")",
+      "Bash(python3 preflight.py --help)",
+      "Bash(python3 preflight.py -v \"Set up GitHub Actions to auto-review PRs with Claude Code\")",
+      "Bash(test -f .env)",
+      "Bash(pip3 install python-dotenv)",
+      "Bash(python3 preflight.py -v \"Write a hook that runs ESLint after every file edit\")",
+      "Bash(python3 preflight.py -v --env \"VS Code, TypeScript, macOS\" \"Migrate a React app from JavaScript to TypeScript\")",
+      "Bash(python3 preflight.py --from-scope -y -v)",
+      "Bash(python3 preflight.py -v \"Add a simple utility function\")",
+      "Bash(python3 preflight.py -v \"Implement the multi-step checkout wizard for an e-commerce platform by building a 4-step React form in Next.js 14 with TypeScript, integrating Stripe Elements for payment processing and Redis-backed order persistence across a pnpm monorepo.\")",
+      "Bash(git add .gitignore README.md config.yaml requirements.txt mdx_cleaner.py scrape_docs.py preflight.py prompts/ corpus/ corpus_custom/.gitkeep scope/)",
+      "Bash(git add .env.example)",
+      "Bash(git commit:*)",
+      "Bash(git push origin main)",
+      "Bash(python3 preflight.py --from-scope -y -v -m claude-opus-4-5-20250219)",
+      "Bash(python3 preflight.py --from-scope -y -v -m claude-opus-4-6)",
+      "Bash(python3 preflight.py -v \"Set up a basic Python project with tests\")",
+      "Bash(python3 preflight.py -v -m claude-opus-4-6 \"Build a Python backtesting system for a crypto momentum strategy trading top-20 coins on daily Binance OHLCV data \\(2018-present\\). Two signals: 10/20-day EMA crossover and 14-day momentum Z-score. Walk-forward analysis \\(180-day formation, 30-day trading windows\\). Volatility-scaled position sizing \\(1-2% risk, max 5 concurrent\\). Modular architecture: data fetcher, signals, portfolio, engine, reporting. Comprehensive tests with pytest and hypothesis \\(85% coverage target\\). CLI entry point with HTML tearsheet generation.\")",
+      "Bash(test -f /Users/patrick/Documents/claude-code-preflight-project-plan/.env)",
+      "Bash(git add README.md scope/README.md scope/crypto_momentum_backtester_spec.md .claude/settings.json)"
+    ]
+  }
+}

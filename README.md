@@ -67,13 +67,13 @@ Instead of writing a one-liner, drop `.md` files describing your project into `s
 
 ```bash
 # Auto-generate task from scope files, review it, then get briefing
-python preflight.py --from-scope
+python3 preflight.py --from-scope
 
 # Auto-approve the generated task (skip review step)
-python preflight.py --from-scope -y
+python3 preflight.py --from-scope -y
 
 # Use specific files instead of the scope/ directory
-python preflight.py --from-scope --scope-files docs/overview.md docs/sprint.md
+python3 preflight.py --from-scope --scope-files docs/overview.md docs/sprint.md
 
 # Use a custom scope directory
 python preflight.py --from-scope --scope-dir ./docs/project/
