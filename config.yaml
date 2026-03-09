@@ -10,3 +10,12 @@ cache_corpus: true
 scope_dir: ./scope                    # Default directory for project scope files
 scope_model: claude-haiku-4-5-20251001  # Lighter model for Pass 1 (task generation)
 scope_max_tokens: 1024                # Max output tokens for Pass 1
+
+# Doc selection settings (Haiku pre-filter to reduce Sonnet costs)
+select_model: claude-haiku-4-5-20251001  # Model for doc selection pass
+select_max_tokens: 512                   # Max output for selection
+always_include_docs:                     # Always send these docs to Sonnet
+  - 00-best-practices
+  - 01-common-workflows
+max_selected_docs: 10                    # Maximum docs to select
+skip_selection: false                    # Set true to send full corpus (legacy behavior)

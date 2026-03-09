@@ -2,7 +2,7 @@
 
 A CLI tool that generates a focused briefing of Claude Code best practices before you start a task. Describe what you're about to do, and get back a targeted briefing with the most relevant workflows, configuration tips, and gotchas — ready to paste into your session or CLAUDE.md.
 
-No vector DB. No embeddings. Just the full Claude Code docs corpus + a smart routing prompt.
+No vector DB. No embeddings. Just the Claude Code docs corpus + a smart two-stage routing system.
 
 ## Quick Start
 
@@ -49,10 +49,11 @@ python preflight.py -v "Write a hook that runs ESLint after edits"
 ## How It Works
 
 1. **Corpus**: 58 Claude Code documentation pages stored as clean markdown in `corpus/`
-2. **System prompt**: Instructs Claude to extract only practices relevant to your specific task
-3. **Prompt caching**: The corpus is cached server-side, so repeated calls are fast and cheap (~$0.05 vs ~$0.21 for the first call)
+2. **Doc selection** (Haiku): A lightweight pre-filter reads a compact manifest of all docs and selects the 5-10 most relevant for your task (~$0.004)
+3. **Briefing generation** (Sonnet): Only the selected docs (~20-30K tokens instead of ~166K) are sent to Sonnet with a smart routing prompt
+4. **Prompt caching**: The selected corpus is cached server-side, so repeated similar calls are even cheaper
 
-The full corpus (~166K tokens) is sent as context with every request. Claude reads it, identifies the relevant sections, and returns a structured briefing with:
+Instead of sending the full corpus every time, the two-stage pipeline cuts Sonnet input by ~80%, reducing cost from ~$2.50 to ~$0.12 per briefing. Claude reads the selected docs and returns a structured briefing with:
 
 - **Task Understanding** — restates what you're doing
 - **Recommended Workflow** — which mode, tools, and session structure to use
@@ -86,7 +87,8 @@ python preflight.py --from-scope -y -c -v
 
 1. **Pass 1** (Haiku, ~$0.002): Reads your scope files and generates a comprehensive TASK / ENVIRONMENT / CONCERNS description
 2. **You review/edit** the generated description (or skip with `-y`)
-3. **Pass 2** (Sonnet): Runs the normal preflight briefing with that description
+3. **Pass 2** (Haiku, ~$0.004): Selects the most relevant docs from the corpus
+4. **Pass 3** (Sonnet, ~$0.12): Runs the preflight briefing with only the selected docs
 
 ### Scope file examples
 
@@ -120,6 +122,7 @@ No special format required — just plain markdown. The system reads whatever yo
 | `--scope-files` | | Specific scope files to use |
 | `--auto-approve` | `-y` | Skip review of generated task |
 | `--scope-model` | | Override model for Pass 1 |
+| `--full-corpus` | | Skip doc selection, send full corpus (legacy) |
 
 ## Configuration
 
@@ -138,6 +141,15 @@ cache_corpus: true
 scope_dir: ./scope             # Default scope file directory
 scope_model: claude-haiku-4-5-20251001  # Lighter model for Pass 1
 scope_max_tokens: 1024         # Max output for task generation
+
+# Doc selection settings (Haiku pre-filter to reduce Sonnet costs)
+select_model: claude-haiku-4-5-20251001  # Model for doc selection
+select_max_tokens: 512
+always_include_docs:           # Always include these docs
+  - 00-best-practices
+  - 01-common-workflows
+max_selected_docs: 10          # Max docs to select
+skip_selection: false          # Set true to send full corpus
 ```
 
 ## Updating the Corpus
@@ -186,7 +198,8 @@ section: "Custom"
 ├── prompts/
 │   ├── system_prompt.md     # Routing/extraction prompt
 │   ├── output_template.md   # Output format definition
-│   └── scope_prompt.md      # Pass 1 prompt for task generation
+│   ├── scope_prompt.md      # Pass 1 prompt for task generation
+│   └── select_prompt.md     # Doc selection prompt (Haiku pre-filter)
 ├── preflight.py             # Main CLI script
 ├── scrape_docs.py           # One-time doc scraper
 ├── mdx_cleaner.py           # MDX-to-markdown converter
@@ -197,11 +210,16 @@ section: "Custom"
 
 ## Cost
 
-With `claude-sonnet-4-6`:
+With `claude-sonnet-4-6` and doc selection (default):
 
-- **First call**: ~$0.21 (corpus cached server-side)
-- **Subsequent calls**: ~$0.05 (reads from cache)
-- **Output**: ~$0.02 per briefing
-- **Scope mode (Pass 1)**: adds ~$0.002 (Haiku)
+- **Doc selection** (Haiku): ~$0.004 per call
+- **Briefing generation** (Sonnet): ~$0.10-$0.12 per call (~30K input tokens)
+- **Scope mode** (Pass 1, Haiku): adds ~$0.002
+- **Total per briefing**: ~$0.12
 
-Use `--verbose` to see exact token counts per call.
+With `--full-corpus` (legacy, sends all ~166K tokens):
+
+- **First call**: ~$0.80 (cache creation)
+- **Subsequent calls within 5 min**: ~$0.05 (cache hit)
+
+Use `--verbose` to see exact token counts, selected docs, and cost breakdown per call.

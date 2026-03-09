@@ -16,6 +16,7 @@ Usage:
 import argparse
 import glob
 import hashlib
+import json
 import os
 import sys
 import time
@@ -206,6 +207,170 @@ def get_cached_corpus(corpus_dir: str, custom_corpus_dir: str = None,
     return corpus
 
 
+def build_doc_manifest(corpus_dir: str, custom_corpus_dir: str = None) -> str:
+    """Build a compact catalog of all corpus docs (title + summary) for Haiku selection."""
+    entries = []
+
+    for directory in [corpus_dir, custom_corpus_dir]:
+        if directory is None:
+            continue
+        dir_path = resolve_path(directory)
+        if not dir_path.exists():
+            continue
+
+        for filepath in sorted(dir_path.glob("*.md")):
+            if filepath.name == '.gitkeep':
+                continue
+
+            slug = filepath.stem.split('-', 1)[-1] if '-' in filepath.stem else filepath.stem
+            if slug in CORPUS_EXCLUDE:
+                continue
+
+            content = filepath.read_text(encoding='utf-8')
+            title = filepath.stem
+            section = ""
+
+            if content.startswith('---'):
+                parts_fm = content.split('---', 2)
+                if len(parts_fm) >= 3:
+                    try:
+                        fm = yaml.safe_load(parts_fm[1])
+                        if fm:
+                            title = fm.get('title', title)
+                            section = fm.get('section', '')
+                        content = parts_fm[2].strip()
+                    except yaml.YAMLError:
+                        pass
+
+            # Extract summary: first blockquote or first paragraph after H1
+            summary = ""
+            for line in content.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('>'):
+                    summary = line.lstrip('> ').strip()
+                else:
+                    summary = line[:200]
+                break
+
+            section_label = f" | Section: {section}" if section else ""
+            entries.append(f"ID: {filepath.stem}{section_label} | Title: {title}\nSummary: {summary}")
+
+    return "\n\n".join(entries)
+
+
+def select_relevant_docs(task: str, env: str, concerns: str,
+                         manifest: str, config: dict) -> tuple[list[str], dict]:
+    """Use Haiku to select which docs are relevant to the task. Returns (doc_ids, usage_info)."""
+    client = Anthropic()
+
+    select_prompt = ""
+    prompts_dir = resolve_path(config.get("prompts_dir", "./prompts"))
+    sp_path = prompts_dir / "select_prompt.md"
+    if sp_path.exists():
+        select_prompt = sp_path.read_text(encoding='utf-8').strip()
+
+    user_msg = f"TASK: {task}"
+    if env:
+        user_msg += f"\nENVIRONMENT: {env}"
+    if concerns:
+        user_msg += f"\nCONCERNS: {concerns}"
+    user_msg += f"\n\nDOCUMENT CATALOG:\n\n{manifest}"
+
+    response = api_call_with_retry(
+        client.messages.create,
+        model=config.get("select_model", "claude-haiku-4-5-20251001"),
+        max_tokens=config.get("select_max_tokens", 512),
+        system=select_prompt,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+
+    text = response.content[0].text.strip()
+
+    # Parse JSON array from response (handle markdown code fences)
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+    try:
+        doc_ids = json.loads(text)
+    except json.JSONDecodeError:
+        # Fallback: try to extract array from the text
+        import re
+        match = re.search(r'\[.*?\]', text, re.DOTALL)
+        if match:
+            doc_ids = json.loads(match.group())
+        else:
+            # If parsing fails entirely, return empty (will fall back to full corpus)
+            return [], {"input_tokens": response.usage.input_tokens,
+                        "output_tokens": response.usage.output_tokens}
+
+    # Ensure always-include docs are present
+    always_include = config.get("always_include_docs", ["00-best-practices", "01-common-workflows"])
+    for doc_id in always_include:
+        if doc_id not in doc_ids:
+            doc_ids.append(doc_id)
+
+    # Cap at max
+    max_docs = config.get("max_selected_docs", 10)
+    doc_ids = doc_ids[:max_docs]
+
+    usage = {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+    }
+    return doc_ids, usage
+
+
+def load_corpus_selective(doc_ids: list[str], corpus_dir: str,
+                          custom_corpus_dir: str = None,
+                          max_doc_chars: int = MAX_DOC_CHARS) -> str:
+    """Load only the selected docs from the corpus directories."""
+    parts = []
+
+    for directory in [corpus_dir, custom_corpus_dir]:
+        if directory is None:
+            continue
+        dir_path = resolve_path(directory)
+        if not dir_path.exists():
+            continue
+
+        for filepath in sorted(dir_path.glob("*.md")):
+            if filepath.stem not in doc_ids:
+                continue
+
+            content = filepath.read_text(encoding='utf-8')
+            title = filepath.stem
+            section = ""
+            source = ""
+
+            if content.startswith('---'):
+                parts_fm = content.split('---', 2)
+                if len(parts_fm) >= 3:
+                    try:
+                        fm = yaml.safe_load(parts_fm[1])
+                        if fm:
+                            title = fm.get('title', title)
+                            section = fm.get('section', '')
+                            source = fm.get('source', '')
+                        content = parts_fm[2].strip()
+                    except yaml.YAMLError:
+                        pass
+
+            content = truncate_content(content, max_doc_chars)
+
+            section_label = f" ({section})" if section else ""
+            source_line = f"\n[source: {source}]" if source else ""
+
+            parts.append(
+                f"=== BEGIN DOC: {title}{section_label} ==={source_line}\n\n"
+                f"{content}\n\n"
+                f"=== END DOC: {title} ==="
+            )
+
+    return "\n\n".join(parts)
+
+
 def load_system_prompt(prompts_dir: str) -> str:
     """Load system prompt and output template, concatenated."""
     dir_path = resolve_path(prompts_dir)
@@ -237,22 +402,57 @@ def build_user_message(task: str, env: str = None, concerns: str = None) -> str:
 
 
 def run_preflight(task: str, env: str = None, concerns: str = None,
-                  config: dict = None) -> dict:
+                  config: dict = None, verbose: bool = False) -> dict:
     """
     Call the Anthropic API and return the briefing.
-    Returns a dict with 'text', 'input_tokens', 'output_tokens'.
+    Returns a dict with 'text', 'input_tokens', 'output_tokens', and selection metadata.
     """
     if config is None:
         config = load_config("config.yaml")
 
     client = Anthropic()
+    corpus_dir = config.get("corpus_dir", "./corpus")
+    custom_corpus_dir = config.get("custom_corpus_dir", "./corpus_custom")
+    skip_selection = config.get("skip_selection", False)
 
-    corpus = get_cached_corpus(
-        config.get("corpus_dir", "./corpus"),
-        config.get("custom_corpus_dir", "./corpus_custom"),
-        config.get("cache_corpus", True),
-        config.get("max_doc_chars", MAX_DOC_CHARS),
-    )
+    selection_usage = None
+    selected_docs = None
+
+    if skip_selection:
+        # Full corpus mode (legacy behavior)
+        corpus = get_cached_corpus(
+            corpus_dir, custom_corpus_dir,
+            config.get("cache_corpus", True),
+            config.get("max_doc_chars", MAX_DOC_CHARS),
+        )
+    else:
+        # Two-stage: Haiku selects relevant docs, then load only those
+        manifest = build_doc_manifest(corpus_dir, custom_corpus_dir)
+
+        if verbose:
+            print(f"Selecting relevant docs using "
+                  f"{config.get('select_model', 'claude-haiku-4-5-20251001')}...")
+
+        selected_docs, selection_usage = select_relevant_docs(
+            task, env, concerns, manifest, config,
+        )
+
+        if selected_docs:
+            if verbose:
+                print(f"Selected {len(selected_docs)} docs: {', '.join(selected_docs)}")
+            corpus = load_corpus_selective(
+                selected_docs, corpus_dir, custom_corpus_dir,
+                config.get("max_doc_chars", MAX_DOC_CHARS),
+            )
+        else:
+            # Fallback to full corpus if selection failed
+            if verbose:
+                print("Doc selection returned no results, falling back to full corpus.")
+            corpus = get_cached_corpus(
+                corpus_dir, custom_corpus_dir,
+                config.get("cache_corpus", True),
+                config.get("max_doc_chars", MAX_DOC_CHARS),
+            )
 
     system_prompt = load_system_prompt(config.get("prompts_dir", "./prompts"))
     user_msg = build_user_message(task, env, concerns)
@@ -273,13 +473,20 @@ def run_preflight(task: str, env: str = None, concerns: str = None,
         messages=[{"role": "user", "content": user_msg}],
     )
 
-    return {
+    result = {
         "text": response.content[0].text,
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
         "cache_creation_input_tokens": getattr(response.usage, 'cache_creation_input_tokens', 0),
         "cache_read_input_tokens": getattr(response.usage, 'cache_read_input_tokens', 0),
     }
+
+    if selection_usage:
+        result["selection_usage"] = selection_usage
+    if selected_docs:
+        result["selected_docs"] = selected_docs
+
+    return result
 
 
 def interactive_prompt() -> tuple[str, str, str]:
@@ -497,6 +704,8 @@ def main():
                         help="Skip review of generated task description")
     parser.add_argument("--scope-model", default=None,
                         help="Model for task generation (default: claude-haiku-4-5)")
+    parser.add_argument("--full-corpus", action="store_true",
+                        help="Skip doc selection and send full corpus (legacy behavior)")
 
     args = parser.parse_args()
 
@@ -506,6 +715,8 @@ def main():
         config["model"] = args.model
     if args.scope_model:
         config["scope_model"] = args.scope_model
+    if args.full_corpus:
+        config["skip_selection"] = True
 
     # --- Input routing: three paths ---
     if args.from_scope:
@@ -561,7 +772,7 @@ def main():
     start_time = time.time()
 
     try:
-        result = run_preflight(task, env, concerns, config)
+        result = run_preflight(task, env, concerns, config, verbose=args.verbose)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         if "ANTHROPIC_API_KEY" in str(e) or "api_key" in str(e).lower():
@@ -580,8 +791,15 @@ def main():
         print(f"\n{'=' * 40}")
         print(f"Model: {config.get('model', 'claude-sonnet-4-6')}")
         print(f"Time: {elapsed:.1f}s")
-        print(f"Input tokens: {result['input_tokens']:,}")
-        print(f"Output tokens: {result['output_tokens']:,}")
+        if result.get('selection_usage'):
+            su = result['selection_usage']
+            print(f"Doc selection: {su['input_tokens']:,} in / {su['output_tokens']:,} out "
+                  f"({config.get('select_model', 'claude-haiku-4-5-20251001')})")
+        if result.get('selected_docs'):
+            print(f"Selected docs ({len(result['selected_docs'])}): "
+                  f"{', '.join(result['selected_docs'])}")
+        print(f"Briefing input tokens: {result['input_tokens']:,}")
+        print(f"Briefing output tokens: {result['output_tokens']:,}")
         if result.get('cache_creation_input_tokens'):
             print(f"Cache creation tokens: {result['cache_creation_input_tokens']:,}")
         if result.get('cache_read_input_tokens'):
